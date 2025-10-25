@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  iso2god-web:
+    build: .
+    container_name: iso2god-web
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount your existing ISO files directory from Unraid
+      # Example: /mnt/user/xbox360-isos:/data/input:ro
+      - /path/to/your/xbox360-isos:/data/input:ro
+      # Mount your output directory for converted GOD files
+      # Example: /mnt/user/xbox360-god:/data/output
+      - /path/to/your/output:/data/output
+    environment:
+      - ROCKET_ADDRESS=0.0.0.0
+      - ROCKET_PORT=8000
+    restart: unless-stopped

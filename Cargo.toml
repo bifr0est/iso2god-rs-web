@@ -15,6 +15,14 @@ clap = { version = "4.5.32", features = ["derive"] }
 num_enum = "0.7.3"
 rayon = "1.10.0"
 sha1 = "0.10.6"
+rocket = { version = "0.5.1", features = ["json"] }
+tokio = { version = "1.38.0", features = ["full"] }
+tempfile = "3.10.1"
+tera = "1.20.0"
+walkdir = "2.5.0"
+serde = { version = "1.0.219", features = ["derive"] }
+rocket_dyn_templates = { version = "0.1.0-rc.4", features = ["tera"] }
+suppaftp = { version = "6.0.1", features = ["native-tls"] }
 
 [dev-dependencies]
 reqwest = { version = "0.12.15", features = ["blocking", "json"] }
@@ -25,3 +33,7 @@ serde_json = "1.0.140"
 [profile.release]
 strip = true
 lto = true
+
+[[bin]]
+name = "iso2god-web"
+path = "src/bin/iso2god-web.rs"

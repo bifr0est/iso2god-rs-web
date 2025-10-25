@@ -1,0 +1,7 @@
+target/
+.git/
+.gitignore
+*.md
+input/
+output/
+.env
