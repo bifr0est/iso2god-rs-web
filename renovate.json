@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "schedule": [
+    "every weekend"
+  ],
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "rangeStrategy": "bump",
+      "automerge": false
+    }
+  ],
+  "cargo": {
+    "enabled": true
+  },
+  "labels": [
+    "dependencies"
+  ]
+}
