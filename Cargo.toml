@@ -9,7 +9,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = { version = "1.0.97", features = ["backtrace"] }
-bitflags = "2.9.0"
+bitflags = "2.10.0"
 byteorder = "1.5.0"
 clap = { version = "4.5.32", features = ["derive"] }
 num_enum = "0.7.3"
