@@ -248,10 +248,37 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
             // Update UI for transfer phase
             convertBtn.textContent = 'Transferring to Xbox...';
             resetProgress();
-            const transferProgressTimer = simulateProgress(120000); // 2 minutes for transfer
 
             statusDiv.innerHTML += '<br><br>📡 Starting FTP transfer to Xbox 360...';
             statusDiv.className = 'status-info';
+
+            // Generate a unique session ID for this FTP transfer
+            const sessionId = 'ftp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
+            // Start listening to FTP progress via SSE
+            const progressEventSource = new EventSource(`/ftp-progress/${sessionId}`);
+            const progressContainer = document.getElementById('progress-container');
+            const progressFill = document.getElementById('progress-fill');
+            const progressText = document.getElementById('progress-text');
+            const progressMessage = document.getElementById('progress-message');
+
+            progressContainer.style.display = 'block';
+
+            progressEventSource.onmessage = (event) => {
+                const progress = JSON.parse(event.data);
+
+                progressFill.style.width = progress.percentage + '%';
+                progressText.textContent = progress.percentage + '%';
+                progressMessage.textContent = progress.message;
+
+                if (progress.is_complete) {
+                    progressEventSource.close();
+                }
+            };
+
+            progressEventSource.onerror = () => {
+                progressEventSource.close();
+            };
 
             try {
                 const transferResponse = await fetch('/ftp-transfer', {
@@ -260,6 +287,7 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
+                        session_id: sessionId,
                         god_path: convertedGamePath,
                         ftp_host: ftpHost,
                         ftp_port: ftpPort,
@@ -271,7 +299,7 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
 
                 const transferResult = await transferResponse.json();
 
-                clearInterval(transferProgressTimer);
+                progressEventSource.close();
                 completeProgress();
 
                 if (transferResult.success) {
@@ -282,7 +310,7 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
                     statusDiv.className = 'status-error';
                 }
             } catch (transferError) {
-                clearInterval(transferProgressTimer);
+                progressEventSource.close();
                 resetProgress();
                 statusDiv.innerHTML = `✓ Conversion successful<br><pre>${result.message}</pre><br><br>✗ FTP Transfer failed: ${transferError.message}`;
                 statusDiv.className = 'status-error';

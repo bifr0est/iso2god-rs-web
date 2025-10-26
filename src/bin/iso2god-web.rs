@@ -6,7 +6,9 @@ use std::io::{Seek, SeekFrom, Write};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::panic;
+use std::collections::HashMap;
 
 use anyhow::{Context, Error};
 
@@ -14,7 +16,10 @@ use rocket::fs::{FileServer, TempFile};
 use rocket::form::{Form, FromForm};
 use rocket::serde::json::Json;
 use rocket::serde::{Serialize, Deserialize};
-use rocket::{get, post, launch, routes};
+use rocket::{get, post, launch, routes, State};
+use rocket::response::stream::{Event, EventStream};
+use rocket::tokio::select;
+use rocket::tokio::time::{interval, Duration};
 use rocket_dyn_templates::{Template, context};
 
 use iso2god::executable::{TitleExecutionInfo, TitleInfo};
@@ -29,6 +34,31 @@ use tempfile::tempdir;
 use walkdir::WalkDir;
 use suppaftp::FtpStream;
 use suppaftp::native_tls::{TlsConnector, TlsStream};
+
+#[derive(Clone, Serialize, Deserialize)]
+struct FtpProgress {
+    current_file: String,
+    files_transferred: usize,
+    total_files: usize,
+    percentage: u8,
+    message: String,
+    is_complete: bool,
+}
+
+impl Default for FtpProgress {
+    fn default() -> Self {
+        Self {
+            current_file: String::new(),
+            files_transferred: 0,
+            total_files: 0,
+            percentage: 0,
+            message: "Initializing...".to_string(),
+            is_complete: false,
+        }
+    }
+}
+
+type FtpProgressMap = Arc<Mutex<HashMap<String, FtpProgress>>>;
 
 #[derive(Serialize, Deserialize)]
 struct IsoFile {
@@ -64,6 +94,7 @@ struct ConversionResponse {
 
 #[derive(Serialize, Deserialize)]
 struct FtpTransferRequest {
+    session_id: String,
     god_path: String,
     ftp_host: String,
     ftp_port: u16,
@@ -77,11 +108,42 @@ struct FtpTransferResponse {
     success: bool,
     message: String,
     files_transferred: usize,
+    session_id: String,
 }
 
 #[get("/")]
 fn index() -> Template {
     Template::render("index", context! {})
+}
+
+#[get("/ftp-progress/<session_id>")]
+fn ftp_progress(session_id: String, progress_map: &State<FtpProgressMap>) -> EventStream![] {
+    let progress_map = progress_map.inner().clone();
+
+    EventStream! {
+        let mut interval = interval(Duration::from_millis(100));
+
+        loop {
+            interval.tick().await;
+
+            let progress = {
+                let map = progress_map.lock().unwrap();
+                map.get(&session_id).cloned()
+            };
+
+            if let Some(prog) = progress {
+                let is_complete = prog.is_complete;
+                yield Event::json(&prog);
+
+                if is_complete {
+                    break;
+                }
+            } else {
+                // Session not found or not started yet
+                yield Event::json(&FtpProgress::default());
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -434,13 +496,20 @@ fn write_part_mht(
 }
 
 #[post("/ftp-transfer", format = "json", data = "<request>")]
-async fn ftp_transfer(request: Json<FtpTransferRequest>) -> Json<FtpTransferResponse> {
+async fn ftp_transfer(
+    request: Json<FtpTransferRequest>,
+    progress_map: &State<FtpProgressMap>,
+) -> Json<FtpTransferResponse> {
     let god_path = PathBuf::from(&request.god_path);
     let ftp_host = request.ftp_host.clone();
     let ftp_port = request.ftp_port;
     let ftp_username = request.ftp_username.clone();
     let ftp_password = request.ftp_password.clone();
     let ftp_target_path = request.ftp_target_path.clone();
+    let session_id = request.session_id.clone();
+    let session_id_for_response = session_id.clone();
+
+    let progress_map_clone = progress_map.inner().clone();
 
     let result = tokio::task::spawn_blocking(move || {
         transfer_to_ftp(
@@ -450,6 +519,8 @@ async fn ftp_transfer(request: Json<FtpTransferRequest>) -> Json<FtpTransferResp
             &ftp_username,
             &ftp_password,
             &ftp_target_path,
+            session_id,
+            progress_map_clone,
         )
     })
     .await;
@@ -459,16 +530,19 @@ async fn ftp_transfer(request: Json<FtpTransferRequest>) -> Json<FtpTransferResp
             success: true,
             message: format!("Successfully transferred {} files to Xbox 360", count),
             files_transferred: count,
+            session_id: session_id_for_response,
         }),
         Ok(Err(e)) => Json(FtpTransferResponse {
             success: false,
             message: format!("FTP transfer failed: {}", e),
             files_transferred: 0,
+            session_id: session_id_for_response,
         }),
         Err(e) => Json(FtpTransferResponse {
             success: false,
             message: format!("Task execution failed: {}", e),
             files_transferred: 0,
+            session_id: session_id_for_response,
         }),
     }
 }
@@ -480,7 +554,20 @@ fn transfer_to_ftp(
     username: &str,
     password: &str,
     target_path: &str,
+    session_id: String,
+    progress_map: FtpProgressMap,
 ) -> Result<usize, Error> {
+    // Helper to update progress
+    let update_progress = |progress: FtpProgress| {
+        let mut map = progress_map.lock().unwrap();
+        map.insert(session_id.clone(), progress);
+    };
+
+    update_progress(FtpProgress {
+        message: format!("Connecting to FTP server {}:{}", ftp_host, ftp_port),
+        ..Default::default()
+    });
+
     eprintln!("Connecting to FTP server {}:{}", ftp_host, ftp_port);
 
     // Connect to FTP server
@@ -491,6 +578,11 @@ fn transfer_to_ftp(
     ftp_stream
         .login(username, password)
         .context("FTP login failed")?;
+
+    update_progress(FtpProgress {
+        message: "FTP login successful".to_string(),
+        ..Default::default()
+    });
 
     eprintln!("FTP login successful");
 
@@ -503,6 +595,19 @@ fn transfer_to_ftp(
     ftp_stream.cwd(target_path)
         .context(format!("Failed to change to target directory: {}", target_path))?;
 
+    // Count total files first
+    let total_files = WalkDir::new(god_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .count();
+
+    update_progress(FtpProgress {
+        total_files,
+        message: format!("Starting transfer of {} files", total_files),
+        ..Default::default()
+    });
+
     let mut files_transferred = 0;
 
     // Walk through the GOD directory structure
@@ -513,6 +618,19 @@ fn transfer_to_ftp(
             // Get relative path from god_path
             let relative_path = path.strip_prefix(god_path)?;
             let remote_path = relative_path.to_string_lossy().to_string();
+
+            update_progress(FtpProgress {
+                current_file: remote_path.clone(),
+                files_transferred,
+                total_files,
+                percentage: if total_files > 0 {
+                    ((files_transferred as f64 / total_files as f64) * 100.0) as u8
+                } else {
+                    0
+                },
+                message: format!("Uploading: {}", remote_path),
+                is_complete: false,
+            });
 
             eprintln!("Uploading: {}", remote_path);
 
@@ -547,14 +665,26 @@ fn transfer_to_ftp(
     ftp_stream.quit()
         .context("Failed to disconnect from FTP server")?;
 
+    update_progress(FtpProgress {
+        current_file: String::new(),
+        files_transferred,
+        total_files,
+        percentage: 100,
+        message: format!("FTP transfer complete: {} files transferred", files_transferred),
+        is_complete: true,
+    });
+
     eprintln!("FTP transfer complete: {} files transferred", files_transferred);
     Ok(files_transferred)
 }
 
 #[launch]
 fn rocket() -> rocket::Rocket<rocket::Build> {
+    let progress_map: FtpProgressMap = Arc::new(Mutex::new(HashMap::new()));
+
     rocket::build()
-        .mount("/", routes![index, list_isos, list_converted_games, convert, ftp_transfer])
+        .manage(progress_map)
+        .mount("/", routes![index, list_isos, list_converted_games, convert, ftp_transfer, ftp_progress])
         .mount("/public", FileServer::from("public"))
         .attach(Template::fairing())
 }
