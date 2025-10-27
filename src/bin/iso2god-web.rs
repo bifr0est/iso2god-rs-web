@@ -215,13 +215,17 @@ fn list_isos() -> Json<Vec<IsoFile>> {
             if let Some(ext) = path.extension() {
                 if ext.eq_ignore_ascii_case("iso") {
                     if let Ok(metadata) = fs::metadata(path) {
-                        if let Some(name) = path.file_name() {
-                            iso_files.push(IsoFile {
-                                path: path.to_string_lossy().to_string(),
-                                name: name.to_string_lossy().to_string(),
-                                size: metadata.len(),
-                            });
-                        }
+                        // Use relative path from /data/input for better display
+                        let display_name = path.strip_prefix(input_dir)
+                            .unwrap_or(path)
+                            .to_string_lossy()
+                            .to_string();
+
+                        iso_files.push(IsoFile {
+                            path: path.to_string_lossy().to_string(),
+                            name: display_name,
+                            size: metadata.len(),
+                        });
                     }
                 }
             }
