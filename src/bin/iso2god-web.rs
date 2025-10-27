@@ -90,6 +90,16 @@ struct ConversionResponse {
     success: bool,
     message: String,
     god_path: Option<String>,
+    game_title: Option<String>,
+    title_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct IsoInfoResponse {
+    success: bool,
+    game_title: Option<String>,
+    title_id: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -222,6 +232,36 @@ fn list_isos() -> Json<Vec<IsoFile>> {
     Json(iso_files)
 }
 
+#[get("/iso-info?<path>")]
+fn get_iso_info(path: String) -> Json<IsoInfoResponse> {
+    match get_iso_title_info(&path) {
+        Ok((title, id)) => Json(IsoInfoResponse {
+            success: true,
+            game_title: Some(title),
+            title_id: Some(id),
+            error: None,
+        }),
+        Err(e) => Json(IsoInfoResponse {
+            success: false,
+            game_title: None,
+            title_id: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+fn get_iso_title_info(iso_path: &str) -> Result<(String, String), Error> {
+    let source_iso_file = File::open(iso_path).context("error opening source ISO file")?;
+    let mut source_iso_reader = iso::IsoReader::read(source_iso_file).context("error reading source ISO")?;
+    let title_info = TitleInfo::from_image(&mut source_iso_reader).context("error reading image executable")?;
+    let exe_info = title_info.execution_info;
+
+    let title_id = format!("{:08X}", exe_info.title_id);
+    let game_name = game_list::find_title_by_id(exe_info.title_id).unwrap_or("(unknown)".to_owned());
+
+    Ok((game_name, title_id))
+}
+
 #[post("/convert", data = "<form>")]
 async fn convert(mut form: Form<ConversionForm<'_>>) -> Json<ConversionResponse> {
     // Determine source ISO path: either from upload or from existing path
@@ -232,6 +272,8 @@ async fn convert(mut form: Form<ConversionForm<'_>>) -> Json<ConversionResponse>
                 success: false,
                 message: "No ISO file path provided".to_string(),
                 god_path: None,
+                game_title: None,
+                title_id: None,
             });
         }
         (PathBuf::from(iso_path), false)
@@ -243,6 +285,8 @@ async fn convert(mut form: Form<ConversionForm<'_>>) -> Json<ConversionResponse>
                 success: false,
                 message: e.to_string(),
                 god_path: None,
+                game_title: None,
+                title_id: None,
             })
         };
         let mut temp_path = temp_dir.path().to_path_buf();
@@ -253,6 +297,8 @@ async fn convert(mut form: Form<ConversionForm<'_>>) -> Json<ConversionResponse>
                 success: false,
                 message: e.to_string(),
                 god_path: None,
+                game_title: None,
+                title_id: None,
             });
         }
         (temp_path, true)
@@ -261,6 +307,8 @@ async fn convert(mut form: Form<ConversionForm<'_>>) -> Json<ConversionResponse>
             success: false,
             message: "No ISO file provided (neither upload nor path)".to_string(),
             god_path: None,
+            game_title: None,
+            title_id: None,
         });
     };
 
@@ -303,25 +351,33 @@ async fn convert(mut form: Form<ConversionForm<'_>>) -> Json<ConversionResponse>
     }).await;
 
     match result {
-        Ok(Ok(Ok((message, god_path)))) => Json(ConversionResponse {
+        Ok(Ok(Ok((message, god_path, game_title, title_id)))) => Json(ConversionResponse {
             success: true,
             message,
             god_path: Some(god_path),
+            game_title: Some(game_title),
+            title_id: Some(title_id),
         }),
         Ok(Ok(Err(e))) => Json(ConversionResponse {
             success: false,
             message: e.to_string(),
             god_path: None,
+            game_title: None,
+            title_id: None,
         }),
         Ok(Err(_)) => Json(ConversionResponse {
             success: false,
             message: "Conversion process panicked".to_string(),
             god_path: None,
+            game_title: None,
+            title_id: None,
         }),
         Err(e) => Json(ConversionResponse {
             success: false,
             message: format!("Task execution failed: {}", e),
             god_path: None,
+            game_title: None,
+            title_id: None,
         }),
     }
 }
@@ -333,7 +389,7 @@ fn convert_iso(
     trim_mode: String,
     num_threads: usize,
     dry_run: bool,
-) -> Result<(String, String), Error> {
+) -> Result<(String, String, String, String), Error> {
     if num_threads == 1 {
         eprintln!(
             "The default number of threads was changed to 1 because of the problems witn Windows and/or hard drives."
@@ -357,13 +413,13 @@ fn convert_iso(
     let exe_info = title_info.execution_info;
     let content_type = title_info.content_type;
 
-    let title_id_str = {
-        let title_id = format!("{:08X}", exe_info.title_id);
-        let name = game_list::find_title_by_id(exe_info.title_id).unwrap_or("(unknown)".to_owned());
+    let title_id = format!("{:08X}", exe_info.title_id);
+    let game_name = game_list::find_title_by_id(exe_info.title_id).unwrap_or("(unknown)".to_owned());
 
+    let title_id_str = {
         let mut result = String::new();
         result.push_str(&format!("Title ID: {}\n", title_id));
-        result.push_str(&format!("    Name: {}\n", name));
+        result.push_str(&format!("    Name: {}\n", game_name));
         match content_type {
             ContentType::GamesOnDemand => result.push_str("    Type: Games on Demand\n"),
             ContentType::XboxOriginal => result.push_str("    Type: Xbox Original\n"),
@@ -373,7 +429,7 @@ fn convert_iso(
 
     if dry_run {
         // For dry run, return empty god_path since nothing was created
-        return Ok((title_id_str, String::new()));
+        return Ok((title_id_str, String::new(), game_name, title_id));
     }
 
     let data_size = if trim_mode == "from-end" {
@@ -467,7 +523,7 @@ fn convert_iso(
         .to_string_lossy()
         .to_string();
 
-    Ok((format!("{}Conversion successful!", title_id_str), god_path))
+    Ok((format!("{}Conversion successful!", title_id_str), god_path, game_name, title_id))
 }
 
 fn ensure_empty_dir(path: &Path) -> Result<(), Error> {
@@ -684,7 +740,7 @@ fn rocket() -> rocket::Rocket<rocket::Build> {
 
     rocket::build()
         .manage(progress_map)
-        .mount("/", routes![index, list_isos, list_converted_games, convert, ftp_transfer, ftp_progress])
+        .mount("/", routes![index, list_isos, list_converted_games, get_iso_info, convert, ftp_transfer, ftp_progress])
         .mount("/public", FileServer::from("public"))
         .attach(Template::fairing())
 }

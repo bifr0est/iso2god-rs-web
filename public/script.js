@@ -24,6 +24,38 @@ async function loadIsoFiles() {
     }
 }
 
+// Auto-fill game title when ISO is selected
+document.getElementById('source-iso-path').addEventListener('change', async (event) => {
+    const isoPath = event.target.value;
+    const gameTitleField = document.getElementById('game-title');
+
+    if (!isoPath) {
+        gameTitleField.value = '';
+        gameTitleField.placeholder = '';
+        return;
+    }
+
+    // Show loading state
+    gameTitleField.placeholder = 'Loading game info...';
+
+    try {
+        const response = await fetch(`/iso-info?path=${encodeURIComponent(isoPath)}`);
+        const info = await response.json();
+
+        if (info.success && info.game_title) {
+            gameTitleField.value = info.game_title;
+            gameTitleField.placeholder = info.game_title;
+        } else {
+            gameTitleField.value = '';
+            gameTitleField.placeholder = 'Could not detect game title';
+        }
+    } catch (error) {
+        console.error('Failed to get ISO info:', error);
+        gameTitleField.value = '';
+        gameTitleField.placeholder = 'Error loading game info';
+    }
+});
+
 // Toggle between select and upload modes
 document.querySelectorAll('input[name="source-type"]').forEach(radio => {
     radio.addEventListener('change', (event) => {
@@ -206,7 +238,10 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
 
         if (result.success) {
             conversionSuccess = true;
-            statusDiv.innerHTML = `✓ Conversion successful!<br><pre>${result.message}</pre>`;
+            const titleInfo = result.game_title ?
+                `<strong>${result.game_title}</strong> (${result.title_id})` :
+                `Title ID: ${result.title_id}`;
+            statusDiv.innerHTML = `✓ Conversion successful!<br>${titleInfo}<br><pre>${result.message}</pre>`;
             statusDiv.className = 'status-success';
             addToHistory({ name: fileName, success: true });
 
