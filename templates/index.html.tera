@@ -25,14 +25,23 @@
                 </div>
             </div>
             <div class="form-group" id="select-iso-group">
-                <label for="source-iso-path">Select ISO file:</label>
-                <select id="source-iso-path" name="source-iso-path">
+                <label for="source-iso-path">Select ISO file(s):</label>
+                <select id="source-iso-path" name="source-iso-path" multiple size="6">
                     <option value="">Loading ISO files...</option>
                 </select>
+                <small>Hold Ctrl/Cmd to select multiple files for batch conversion</small>
             </div>
             <div class="form-group" id="upload-iso-group" style="display: none;">
-                <label for="source-iso">Upload ISO file:</label>
-                <input type="file" id="source-iso" name="source-iso" accept=".iso">
+                <label for="source-iso">Upload ISO file(s):</label>
+                <div id="drop-zone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <span class="drop-zone-icon">📁</span>
+                        <p>Drag & drop ISO files here</p>
+                        <p>or</p>
+                        <input type="file" id="source-iso" name="source-iso" accept=".iso" multiple>
+                    </div>
+                </div>
+                <div id="upload-file-list"></div>
             </div>
             <div class="form-group">
                 <label for="dest-dir">Destination Directory:</label>
@@ -93,11 +102,28 @@
                         <input type="text" id="ftp-target-path-inline" placeholder="/Hdd1/Games" value="/Hdd1/Games">
                         <small>Common: /Hdd1/Games, /Hdd1/Content/0000000000000000</small>
                     </div>
+                    <div class="form-group">
+                        <input type="checkbox" id="ftp-passive-mode" name="ftp-passive-mode">
+                        <label for="ftp-passive-mode">Use Passive Mode (recommended for NAT/firewall)</label>
+                    </div>
+                    <div class="form-group">
+                        <button type="button" id="test-ftp-btn" class="btn-secondary">🔌 Test Connection</button>
+                        <span id="ftp-test-result"></span>
+                    </div>
                 </div>
             </div>
 
             <button type="submit" id="convert-btn">Convert</button>
         </form>
+
+        <!-- Batch Progress Container -->
+        <div id="batch-progress-container" style="display: none;">
+            <h3>📦 Batch Conversion Progress</h3>
+            <div id="batch-status">
+                <span id="batch-current">0</span> / <span id="batch-total">0</span> files
+            </div>
+            <div id="batch-list"></div>
+        </div>
 
         <div id="progress-container" style="display: none;">
             <div class="progress-header">

@@ -411,3 +411,197 @@ select {
     border-bottom: 1px solid #ffc107;
     padding-bottom: 10px;
 }
+
+/* FTP Test Connection */
+#test-ftp-btn {
+    display: inline-block;
+    width: auto;
+    padding: 8px 16px;
+    background-color: #17a2b8;
+    font-size: 14px;
+    margin-right: 10px;
+}
+
+#test-ftp-btn:hover:not(:disabled) {
+    background-color: #138496;
+}
+
+#test-ftp-btn:disabled {
+    background-color: #6c757d;
+}
+
+#ftp-test-result {
+    font-size: 14px;
+    vertical-align: middle;
+}
+
+/* Passive mode checkbox styling */
+#ftp-passive-mode {
+    width: auto;
+    margin-right: 8px;
+}
+
+/* Drag and Drop Zone */
+.drop-zone {
+    border: 3px dashed #ccc;
+    border-radius: 10px;
+    padding: 40px 20px;
+    text-align: center;
+    background-color: #fafafa;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.drop-zone:hover {
+    border-color: #007bff;
+    background-color: #f0f7ff;
+}
+
+.drop-zone.drag-over {
+    border-color: #28a745;
+    background-color: #e8f5e9;
+    transform: scale(1.02);
+}
+
+.drop-zone-content {
+    pointer-events: none;
+}
+
+.drop-zone-icon {
+    font-size: 48px;
+    display: block;
+    margin-bottom: 10px;
+}
+
+.drop-zone p {
+    margin: 5px 0;
+    color: #666;
+}
+
+.drop-zone input[type="file"] {
+    pointer-events: auto;
+    width: auto;
+    display: inline-block;
+    margin-top: 10px;
+}
+
+/* Upload file list */
+#upload-file-list {
+    margin-top: 15px;
+}
+
+.upload-file-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    margin-bottom: 8px;
+    border-left: 4px solid #007bff;
+}
+
+.upload-file-item .file-name {
+    flex: 1;
+    font-weight: 500;
+}
+
+.upload-file-item .file-size {
+    color: #666;
+    font-size: 12px;
+    margin-right: 15px;
+}
+
+.upload-file-item .remove-file {
+    background: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.upload-file-item .remove-file:hover {
+    background: #c82333;
+}
+
+/* Multi-select styling */
+#source-iso-path {
+    min-height: 120px;
+}
+
+#source-iso-path option {
+    padding: 8px;
+}
+
+#source-iso-path option:checked {
+    background: linear-gradient(0deg, #007bff 0%, #0056b3 100%);
+    color: white;
+}
+
+/* Batch Progress Container */
+#batch-progress-container {
+    margin-top: 30px;
+    padding: 20px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    border: 2px solid #007bff;
+}
+
+#batch-progress-container h3 {
+    margin-top: 0;
+    color: #007bff;
+}
+
+#batch-status {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+#batch-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.batch-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    margin-bottom: 8px;
+    background-color: white;
+    border-radius: 5px;
+    border-left: 4px solid #6c757d;
+}
+
+.batch-item.pending {
+    border-left-color: #6c757d;
+}
+
+.batch-item.converting {
+    border-left-color: #ffc107;
+    background-color: #fff8e1;
+}
+
+.batch-item.success {
+    border-left-color: #28a745;
+    background-color: #e8f5e9;
+}
+
+.batch-item.error {
+    border-left-color: #dc3545;
+    background-color: #ffebee;
+}
+
+.batch-item .batch-name {
+    flex: 1;
+    font-weight: 500;
+}
+
+.batch-item .batch-status-icon {
+    font-size: 18px;
+    margin-left: 10px;
+}

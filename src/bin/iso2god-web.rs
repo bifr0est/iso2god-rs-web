@@ -1,39 +1,32 @@
-#![allow(unused_imports)]
-
-#[macro_use] extern crate rocket;
-
-use std::io::{Seek, SeekFrom, Write};
+use std::collections::HashMap;
 use std::fs::{self, File};
+use std::io::{Seek, SeekFrom, Write};
+use std::panic;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::panic;
-use std::collections::HashMap;
 
 use anyhow::{Context, Error};
 
-use rocket::fs::{FileServer, TempFile};
 use rocket::form::{Form, FromForm};
-use rocket::serde::json::Json;
-use rocket::serde::{Serialize, Deserialize};
-use rocket::{get, post, launch, routes, State};
+use rocket::fs::{FileServer, TempFile};
 use rocket::response::stream::{Event, EventStream};
-use rocket::tokio::select;
+use rocket::serde::json::Json;
+use rocket::serde::{Deserialize, Serialize};
 use rocket::tokio::time::{interval, Duration};
-use rocket_dyn_templates::{Template, context};
+use rocket::{get, launch, post, routes, State};
+use rocket_dyn_templates::{context, Template};
 
-use iso2god::executable::{TitleExecutionInfo, TitleInfo};
-use iso2god::{game_list, god};
-use iso2god::iso;
+use iso2god::executable::TitleInfo;
 use iso2god::god::ContentType;
+use iso2god::iso;
+use iso2god::{game_list, god};
 
 use rayon::prelude::*;
-use rayon::iter::ParallelIterator;
 
+use suppaftp::FtpStream;
 use tempfile::tempdir;
 use walkdir::WalkDir;
-use suppaftp::FtpStream;
-use suppaftp::native_tls::{TlsConnector, TlsStream};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct FtpProgress {
@@ -111,6 +104,24 @@ struct FtpTransferRequest {
     ftp_username: String,
     ftp_password: String,
     ftp_target_path: String,
+    #[serde(default)]
+    passive_mode: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct FtpTestRequest {
+    ftp_host: String,
+    ftp_port: u16,
+    ftp_username: String,
+    ftp_password: String,
+    #[serde(default)]
+    passive_mode: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct FtpTestResponse {
+    success: bool,
+    message: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -394,20 +405,15 @@ fn convert_iso(
     num_threads: usize,
     dry_run: bool,
 ) -> Result<(String, String, String, String), Error> {
-    if num_threads == 1 {
-        eprintln!(
-            "The default number of threads was changed to 1 because of the problems witn Windows and/or hard drives."
-        );
-        eprintln!(
-            "If you don't use Windows or use and SSD, might be worth increasing it with the -j <N> flag!"
-        );
-    }
-
-    // Only initialize thread pool if not already initialized
-    // Subsequent requests will reuse the existing pool
-    let _ = rayon::ThreadPoolBuilder::new()
+    // Try to initialize global thread pool, but don't fail if already initialized
+    // The first request sets the pool size; subsequent requests reuse it
+    match rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
-        .build_global();
+        .build_global()
+    {
+        Ok(_) => eprintln!("Thread pool initialized with {} threads", num_threads),
+        Err(_) => eprintln!("Using existing thread pool (requested {} threads)", num_threads),
+    }
 
     let source_iso_file = File::open(&source_iso).context("error opening source ISO file")?;
     let source_iso_file_meta = fs::metadata(&source_iso).context("error reading source ISO file metadata")?;
@@ -555,6 +561,74 @@ fn write_part_mht(
     Ok(())
 }
 
+/// Test FTP connection without transferring any files
+#[post("/ftp-test", format = "json", data = "<request>")]
+async fn ftp_test(request: Json<FtpTestRequest>) -> Json<FtpTestResponse> {
+    let ftp_host = request.ftp_host.clone();
+    let ftp_port = request.ftp_port;
+    let ftp_username = request.ftp_username.clone();
+    let ftp_password = request.ftp_password.clone();
+    let passive_mode = request.passive_mode;
+
+    let result = tokio::task::spawn_blocking(move || {
+        test_ftp_connection(&ftp_host, ftp_port, &ftp_username, &ftp_password, passive_mode)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(msg)) => Json(FtpTestResponse {
+            success: true,
+            message: msg,
+        }),
+        Ok(Err(e)) => Json(FtpTestResponse {
+            success: false,
+            message: format!("Connection failed: {}", e),
+        }),
+        Err(e) => Json(FtpTestResponse {
+            success: false,
+            message: format!("Task failed: {}", e),
+        }),
+    }
+}
+
+fn test_ftp_connection(
+    ftp_host: &str,
+    ftp_port: u16,
+    username: &str,
+    password: &str,
+    passive_mode: bool,
+) -> Result<String, Error> {
+    // Connect with timeout
+    let mut ftp_stream = FtpStream::connect_timeout(
+        format!("{}:{}", ftp_host, ftp_port)
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?,
+        Duration::from_secs(10),
+    )
+    .context("Failed to connect to FTP server")?;
+
+    // Set passive mode if requested
+    if passive_mode {
+        ftp_stream.set_passive_nat_workaround(true);
+    }
+
+    // Login
+    ftp_stream
+        .login(username, password)
+        .context("Login failed - check username and password")?;
+
+    // Try to get current directory to verify connection works
+    let pwd = ftp_stream.pwd().unwrap_or_else(|_| "/".to_string());
+
+    // Disconnect
+    let _ = ftp_stream.quit();
+
+    Ok(format!(
+        "Connection successful! Current directory: {}",
+        pwd
+    ))
+}
+
 #[post("/ftp-transfer", format = "json", data = "<request>")]
 async fn ftp_transfer(
     request: Json<FtpTransferRequest>,
@@ -568,6 +642,7 @@ async fn ftp_transfer(
     let ftp_target_path = request.ftp_target_path.clone();
     let session_id = request.session_id.clone();
     let session_id_for_response = session_id.clone();
+    let passive_mode = request.passive_mode;
 
     let progress_map_clone = progress_map.inner().clone();
 
@@ -579,6 +654,7 @@ async fn ftp_transfer(
             &ftp_username,
             &ftp_password,
             &ftp_target_path,
+            passive_mode,
             session_id,
             progress_map_clone,
         )
@@ -614,6 +690,7 @@ fn transfer_to_ftp(
     username: &str,
     password: &str,
     target_path: &str,
+    passive_mode: bool,
     session_id: String,
     progress_map: FtpProgressMap,
 ) -> Result<usize, Error> {
@@ -623,21 +700,44 @@ fn transfer_to_ftp(
         map.insert(session_id.clone(), progress);
     };
 
+    // Helper to cleanup session from progress map
+    let cleanup_session = || {
+        // Schedule cleanup after a delay to allow final progress read
+        std::thread::spawn({
+            let progress_map = progress_map.clone();
+            let session_id = session_id.clone();
+            move || {
+                std::thread::sleep(Duration::from_secs(30));
+                let mut map = progress_map.lock().unwrap();
+                map.remove(&session_id);
+                eprintln!("Cleaned up FTP session: {}", session_id);
+            }
+        });
+    };
+
+    let mode_str = if passive_mode { "passive" } else { "active" };
     update_progress(FtpProgress {
-        message: format!("Connecting to FTP server {}:{}", ftp_host, ftp_port),
+        message: format!("Connecting to FTP server {}:{} ({})", ftp_host, ftp_port, mode_str),
         ..Default::default()
     });
 
-    eprintln!("Connecting to FTP server {}:{}", ftp_host, ftp_port);
+    eprintln!("Connecting to FTP server {}:{} ({})", ftp_host, ftp_port, mode_str);
 
-    // Connect to FTP server
-    let mut ftp_stream = FtpStream::connect(format!("{}:{}", ftp_host, ftp_port))
-        .context("Failed to connect to FTP server")?;
+    // Connect to FTP server with timeout
+    let mut ftp_stream = FtpStream::connect_timeout(
+        format!("{}:{}", ftp_host, ftp_port).parse().map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?,
+        Duration::from_secs(30)
+    ).context("Failed to connect to FTP server (timeout: 30s)")?;
+
+    // Set passive mode if requested (better for NAT/firewall)
+    if passive_mode {
+        ftp_stream.set_passive_nat_workaround(true);
+    }
 
     // Login
     ftp_stream
         .login(username, password)
-        .context("FTP login failed")?;
+        .context("FTP login failed - check username and password")?;
 
     update_progress(FtpProgress {
         message: "FTP login successful".to_string(),
@@ -669,6 +769,9 @@ fn transfer_to_ftp(
     });
 
     let mut files_transferred = 0;
+    
+    // Track created directories to avoid redundant mkdir calls
+    let mut created_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Walk through the GOD directory structure
     for entry in WalkDir::new(god_path).into_iter().filter_map(|e| e.ok()) {
@@ -677,7 +780,7 @@ fn transfer_to_ftp(
         if path.is_file() {
             // Get relative path from god_path
             let relative_path = path.strip_prefix(god_path)?;
-            let remote_path = relative_path.to_string_lossy().to_string();
+            let remote_path = relative_path.to_string_lossy().replace("\\", "/");
 
             update_progress(FtpProgress {
                 current_file: remote_path.clone(),
@@ -694,30 +797,46 @@ fn transfer_to_ftp(
 
             eprintln!("Uploading: {}", remote_path);
 
-            // Create parent directories on FTP server
+            // Create parent directories on FTP server (building full path incrementally)
             if let Some(parent) = relative_path.parent() {
-                let parent_str = parent.to_string_lossy();
-                if !parent_str.is_empty() {
+                let parent_str = parent.to_string_lossy().replace("\\", "/");
+                if !parent_str.is_empty() && !created_dirs.contains(&parent_str) {
+                    // Build path incrementally: /target/dir1/dir2/...
+                    let mut current_path = target_path.to_string();
                     for component in parent.components() {
                         let dir_name = component.as_os_str().to_string_lossy();
-                        let _ = ftp_stream.mkdir(&dir_name);
-                        ftp_stream.cwd(&dir_name)?;
+                        if current_path.ends_with('/') {
+                            current_path = format!("{}{}", current_path, dir_name);
+                        } else {
+                            current_path = format!("{}/{}", current_path, dir_name);
+                        }
+                        // Only create if not already created
+                        if !created_dirs.contains(&current_path) {
+                            let _ = ftp_stream.mkdir(&current_path);
+                            created_dirs.insert(current_path.clone());
+                        }
                     }
-                    // Go back to target root
-                    ftp_stream.cwd(target_path)?;
+                    created_dirs.insert(parent_str);
                 }
             }
 
-            // Upload the file
+            // Build full remote path
+            let full_remote_path = if target_path.ends_with('/') {
+                format!("{}{}", target_path, remote_path)
+            } else {
+                format!("{}/{}", target_path, remote_path)
+            };
+
+            // Upload the file using absolute path
             let mut file = File::open(path)
                 .context(format!("Failed to open file: {:?}", path))?;
 
             ftp_stream
-                .put_file(&remote_path, &mut file)
-                .context(format!("Failed to upload file: {}", remote_path))?;
+                .put_file(&full_remote_path, &mut file)
+                .context(format!("Failed to upload file: {}", full_remote_path))?;
 
             files_transferred += 1;
-            eprintln!("Uploaded: {} ({} files total)", remote_path, files_transferred);
+            eprintln!("Uploaded: {} ({}/{})", full_remote_path, files_transferred, total_files);
         }
     }
 
@@ -734,6 +853,9 @@ fn transfer_to_ftp(
         is_complete: true,
     });
 
+    // Schedule cleanup of this session from progress map
+    cleanup_session();
+
     eprintln!("FTP transfer complete: {} files transferred", files_transferred);
     Ok(files_transferred)
 }
@@ -744,7 +866,7 @@ fn rocket() -> rocket::Rocket<rocket::Build> {
 
     rocket::build()
         .manage(progress_map)
-        .mount("/", routes![index, list_isos, list_converted_games, get_iso_info, convert, ftp_transfer, ftp_progress])
+        .mount("/", routes![index, list_isos, list_converted_games, get_iso_info, convert, ftp_test, ftp_transfer, ftp_progress])
         .mount("/public", FileServer::from("public"))
         .attach(Template::fairing())
 }

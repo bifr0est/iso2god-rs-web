@@ -6,9 +6,9 @@ async function loadIsoFiles() {
         const select = document.getElementById('source-iso-path');
 
         if (isos.length === 0) {
-            select.innerHTML = '<option value="">No ISO files found in /data/input</option>';
+            select.innerHTML = '<option value="" disabled>No ISO files found in /data/input</option>';
         } else {
-            select.innerHTML = '<option value="">-- Select an ISO file --</option>';
+            select.innerHTML = '';
             isos.forEach(iso => {
                 const option = document.createElement('option');
                 option.value = iso.path;
@@ -20,15 +20,23 @@ async function loadIsoFiles() {
     } catch (error) {
         console.error('Failed to load ISO files:', error);
         const select = document.getElementById('source-iso-path');
-        select.innerHTML = '<option value="">Error loading ISO files</option>';
+        select.innerHTML = '<option value="" disabled>Error loading ISO files</option>';
     }
 }
 
-// Auto-fill game title when ISO is selected
+// Auto-fill game title when ISO is selected (single selection)
 document.getElementById('source-iso-path').addEventListener('change', async (event) => {
-    const isoPath = event.target.value;
+    const selectedOptions = Array.from(event.target.selectedOptions);
     const gameTitleField = document.getElementById('game-title');
 
+    // Only auto-fill if single selection
+    if (selectedOptions.length !== 1) {
+        gameTitleField.value = '';
+        gameTitleField.placeholder = selectedOptions.length > 1 ? 'Multiple files selected' : '';
+        return;
+    }
+
+    const isoPath = selectedOptions[0].value;
     if (!isoPath) {
         gameTitleField.value = '';
         gameTitleField.placeholder = '';
@@ -56,6 +64,94 @@ document.getElementById('source-iso-path').addEventListener('change', async (eve
     }
 });
 
+// Drag and Drop functionality
+let uploadedFiles = [];
+
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('source-iso');
+const fileListContainer = document.getElementById('upload-file-list');
+
+if (dropZone) {
+    // Prevent default drag behaviors
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+        document.body.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    // Highlight drop zone when item is dragged over
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-over'), false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'), false);
+    });
+
+    // Handle dropped files
+    dropZone.addEventListener('drop', handleDrop, false);
+
+    // Handle file input change
+    fileInput.addEventListener('change', handleFileSelect, false);
+
+    // Click on drop zone triggers file input
+    dropZone.addEventListener('click', (e) => {
+        if (e.target !== fileInput) {
+            fileInput.click();
+        }
+    });
+}
+
+function handleDrop(e) {
+    const dt = e.dataTransfer;
+    const files = [...dt.files].filter(f => f.name.toLowerCase().endsWith('.iso'));
+    addFilesToList(files);
+}
+
+function handleFileSelect(e) {
+    const files = [...e.target.files].filter(f => f.name.toLowerCase().endsWith('.iso'));
+    addFilesToList(files);
+}
+
+function addFilesToList(files) {
+    files.forEach(file => {
+        // Avoid duplicates
+        if (!uploadedFiles.some(f => f.name === file.name && f.size === file.size)) {
+            uploadedFiles.push(file);
+        }
+    });
+    renderFileList();
+}
+
+function removeFile(index) {
+    uploadedFiles.splice(index, 1);
+    renderFileList();
+}
+
+function renderFileList() {
+    if (!fileListContainer) return;
+    
+    if (uploadedFiles.length === 0) {
+        fileListContainer.innerHTML = '';
+        return;
+    }
+
+    fileListContainer.innerHTML = uploadedFiles.map((file, index) => {
+        const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+        return `
+            <div class="upload-file-item">
+                <span class="file-name">📀 ${file.name}</span>
+                <span class="file-size">${sizeMB} MB</span>
+                <button type="button" class="remove-file" onclick="removeFile(${index})">✕ Remove</button>
+            </div>
+        `;
+    }).join('');
+}
+
 // Toggle between select and upload modes
 document.querySelectorAll('input[name="source-type"]').forEach(radio => {
     radio.addEventListener('change', (event) => {
@@ -66,12 +162,9 @@ document.querySelectorAll('input[name="source-type"]').forEach(radio => {
             selectGroup.style.display = 'block';
             uploadGroup.style.display = 'none';
             document.getElementById('source-iso').removeAttribute('required');
-            document.getElementById('source-iso-path').setAttribute('required', 'required');
         } else {
             selectGroup.style.display = 'none';
             uploadGroup.style.display = 'block';
-            document.getElementById('source-iso-path').removeAttribute('required');
-            document.getElementById('source-iso').setAttribute('required', 'required');
         }
     });
 });
@@ -188,27 +281,60 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
     event.preventDefault();
 
     const form = event.target;
-    const formData = new FormData(form);
     const statusDiv = document.getElementById('status');
     const convertBtn = document.getElementById('convert-btn');
     const sourceType = document.querySelector('input[name="source-type"]:checked').value;
     const autoTransfer = document.getElementById('auto-transfer').checked;
 
-    // Get filename for history
-    let fileName = 'Unknown';
+    // Collect files to convert
+    let filesToConvert = [];
+    
     if (sourceType === 'select') {
         const selectElement = document.getElementById('source-iso-path');
-        fileName = selectElement.options[selectElement.selectedIndex].text.split(' (')[0];
+        const selectedOptions = Array.from(selectElement.selectedOptions);
+        filesToConvert = selectedOptions.map(opt => ({
+            type: 'path',
+            path: opt.value,
+            name: opt.text.split(' (')[0]
+        })).filter(f => f.path);
+    } else {
+        // Use uploaded files from drag-and-drop or file input
+        if (uploadedFiles.length > 0) {
+            filesToConvert = uploadedFiles.map(file => ({
+                type: 'upload',
+                file: file,
+                name: file.name
+            }));
+        }
+    }
+
+    if (filesToConvert.length === 0) {
+        statusDiv.innerHTML = '⚠️ Please select at least one ISO file';
+        statusDiv.className = 'status-error';
+        statusDiv.style.display = 'block';
+        return;
+    }
+
+    // Single file or batch?
+    if (filesToConvert.length === 1) {
+        await convertSingleFile(filesToConvert[0], form, statusDiv, convertBtn, autoTransfer);
+    } else {
+        await convertBatch(filesToConvert, form, statusDiv, convertBtn, autoTransfer);
+    }
+});
+
+// Convert a single file
+async function convertSingleFile(fileInfo, form, statusDiv, convertBtn, autoTransfer) {
+    const formData = new FormData(form);
+    
+    if (fileInfo.type === 'path') {
+        formData.set('source-iso-path', fileInfo.path);
         formData.delete('source-iso');
     } else {
-        const fileInput = document.getElementById('source-iso');
-        if (fileInput.files.length > 0) {
-            fileName = fileInput.files[0].name;
-        }
+        formData.set('source-iso', fileInfo.file);
         formData.delete('source-iso-path');
     }
 
-    // Update button text based on auto-transfer
     const originalButtonText = autoTransfer ? 'Convert & Transfer' : 'Convert';
 
     // Disable form
@@ -243,14 +369,14 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
                 `Title ID: ${result.title_id}`;
             statusDiv.innerHTML = `✓ Conversion successful!<br>${titleInfo}<br><pre>${result.message}</pre>`;
             statusDiv.className = 'status-success';
-            addToHistory({ name: fileName, success: true });
+            addToHistory({ name: fileInfo.name, success: true });
 
             // Use the god_path returned from the server
             convertedGamePath = result.god_path;
         } else {
             statusDiv.innerHTML = `✗ Conversion failed:<br>${result.message}`;
             statusDiv.className = 'status-error';
-            addToHistory({ name: fileName, success: false });
+            addToHistory({ name: fileInfo.name, success: false });
         }
 
         statusDiv.style.display = 'block';
@@ -263,6 +389,7 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
             const ftpUsername = document.getElementById('ftp-username-inline').value;
             const ftpPassword = document.getElementById('ftp-password-inline').value;
             const ftpTargetPath = document.getElementById('ftp-target-path-inline').value;
+            const passiveMode = document.getElementById('ftp-passive-mode').checked;
 
             if (!ftpHost) {
                 statusDiv.innerHTML += '<br><br>⚠️ Auto-transfer skipped: No Xbox IP address provided';
@@ -276,7 +403,8 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
                 port: ftpPort,
                 username: ftpUsername,
                 password: ftpPassword,
-                targetPath: ftpTargetPath
+                targetPath: ftpTargetPath,
+                passiveMode: passiveMode
             };
             localStorage.setItem('ftpCredentials', JSON.stringify(creds));
 
@@ -328,7 +456,8 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
                         ftp_port: ftpPort,
                         ftp_username: ftpUsername,
                         ftp_password: ftpPassword,
-                        ftp_target_path: ftpTargetPath
+                        ftp_target_path: ftpTargetPath,
+                        passive_mode: passiveMode
                     })
                 });
 
@@ -359,13 +488,164 @@ document.getElementById('conversion-form').addEventListener('submit', async (eve
         statusDiv.className = 'status-error';
         statusDiv.style.display = 'block';
 
-        addToHistory({ name: fileName, success: false });
+        addToHistory({ name: fileInfo.name, success: false });
     } finally {
         convertBtn.disabled = false;
         convertBtn.textContent = originalButtonText;
         convertBtn.classList.remove('loading');
     }
-});
+}
+
+// Batch conversion function
+async function convertBatch(filesToConvert, form, statusDiv, convertBtn, autoTransfer) {
+    const batchContainer = document.getElementById('batch-progress-container');
+    const batchList = document.getElementById('batch-list');
+    const batchCurrent = document.getElementById('batch-current');
+    const batchTotal = document.getElementById('batch-total');
+    
+    const originalButtonText = autoTransfer ? 'Convert & Transfer' : 'Convert';
+    
+    // Disable form
+    convertBtn.disabled = true;
+    convertBtn.textContent = 'Batch Converting...';
+    convertBtn.classList.add('loading');
+    
+    // Hide single status, show batch progress
+    statusDiv.style.display = 'none';
+    batchContainer.style.display = 'block';
+    batchTotal.textContent = filesToConvert.length;
+    batchCurrent.textContent = '0';
+    
+    // Initialize batch list UI
+    batchList.innerHTML = filesToConvert.map((file, index) => `
+        <div class="batch-item pending" id="batch-item-${index}">
+            <span class="batch-name">📀 ${file.name}</span>
+            <span class="batch-status-icon">⏳</span>
+        </div>
+    `).join('');
+    
+    let successCount = 0;
+    let failCount = 0;
+    const results = [];
+    
+    // Process files sequentially
+    for (let i = 0; i < filesToConvert.length; i++) {
+        const fileInfo = filesToConvert[i];
+        const itemEl = document.getElementById(`batch-item-${i}`);
+        
+        // Update UI - converting
+        itemEl.className = 'batch-item converting';
+        itemEl.querySelector('.batch-status-icon').textContent = '🔄';
+        batchCurrent.textContent = i + 1;
+        
+        try {
+            const formData = new FormData(form);
+            
+            if (fileInfo.type === 'path') {
+                formData.set('source-iso-path', fileInfo.path);
+                formData.delete('source-iso');
+            } else {
+                formData.set('source-iso', fileInfo.file);
+                formData.delete('source-iso-path');
+            }
+            
+            // Clear game title for batch (auto-detect each)
+            formData.set('game-title', '');
+            
+            const response = await fetch('/convert', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                successCount++;
+                itemEl.className = 'batch-item success';
+                itemEl.querySelector('.batch-status-icon').textContent = '✓';
+                addToHistory({ name: fileInfo.name, success: true });
+                results.push({ fileInfo, result, success: true });
+                
+                // Auto-transfer if enabled
+                if (autoTransfer && result.god_path) {
+                    itemEl.querySelector('.batch-status-icon').textContent = '📤';
+                    const transferResult = await doFtpTransfer(result.god_path);
+                    if (transferResult.success) {
+                        itemEl.querySelector('.batch-status-icon').textContent = '✓';
+                    } else {
+                        itemEl.querySelector('.batch-status-icon').textContent = '⚠️';
+                    }
+                }
+            } else {
+                failCount++;
+                itemEl.className = 'batch-item error';
+                itemEl.querySelector('.batch-status-icon').textContent = '✗';
+                addToHistory({ name: fileInfo.name, success: false });
+                results.push({ fileInfo, result, success: false });
+            }
+        } catch (error) {
+            failCount++;
+            itemEl.className = 'batch-item error';
+            itemEl.querySelector('.batch-status-icon').textContent = '✗';
+            addToHistory({ name: fileInfo.name, success: false });
+            results.push({ fileInfo, error: error.message, success: false });
+        }
+    }
+    
+    // Show final summary
+    statusDiv.innerHTML = `
+        <strong>📦 Batch Conversion Complete!</strong><br><br>
+        ✓ Success: ${successCount} files<br>
+        ${failCount > 0 ? `✗ Failed: ${failCount} files` : ''}
+    `;
+    statusDiv.className = successCount === filesToConvert.length ? 'status-success' : 'status-info';
+    statusDiv.style.display = 'block';
+    
+    // Re-enable form
+    convertBtn.disabled = false;
+    convertBtn.textContent = originalButtonText;
+    convertBtn.classList.remove('loading');
+    
+    // Clear uploaded files after batch
+    uploadedFiles = [];
+    renderFileList();
+}
+
+// Helper function for FTP transfer
+async function doFtpTransfer(godPath) {
+    const ftpHost = document.getElementById('ftp-host-inline').value;
+    const ftpPort = parseInt(document.getElementById('ftp-port-inline').value);
+    const ftpUsername = document.getElementById('ftp-username-inline').value;
+    const ftpPassword = document.getElementById('ftp-password-inline').value;
+    const ftpTargetPath = document.getElementById('ftp-target-path-inline').value;
+    const passiveMode = document.getElementById('ftp-passive-mode').checked;
+    
+    if (!ftpHost) {
+        return { success: false, message: 'No FTP host configured' };
+    }
+    
+    const sessionId = 'ftp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    
+    try {
+        const response = await fetch('/ftp-transfer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: sessionId,
+                god_path: godPath,
+                ftp_host: ftpHost,
+                ftp_port: ftpPort,
+                ftp_username: ftpUsername,
+                ftp_password: ftpPassword,
+                ftp_target_path: ftpTargetPath,
+                passive_mode: passiveMode
+            })
+        });
+        return await response.json();
+    } catch (error) {
+        return { success: false, message: error.message };
+    }
+}
 
 // Update the Auto option with detected core count
 function updateAutoThreadOption() {
@@ -393,10 +673,58 @@ document.getElementById('auto-transfer').addEventListener('change', function() {
             document.getElementById('ftp-username-inline').value = creds.username || 'xbox';
             document.getElementById('ftp-password-inline').value = creds.password || 'xbox';
             document.getElementById('ftp-target-path-inline').value = creds.targetPath || '/Hdd1/Games';
+            document.getElementById('ftp-passive-mode').checked = creds.passiveMode || false;
         }
     } else {
         ftpSettings.style.display = 'none';
         convertBtn.textContent = 'Convert';
+    }
+});
+
+// Test FTP connection button handler
+document.getElementById('test-ftp-btn').addEventListener('click', async function() {
+    const ftpHost = document.getElementById('ftp-host-inline').value;
+    const ftpPort = parseInt(document.getElementById('ftp-port-inline').value);
+    const ftpUsername = document.getElementById('ftp-username-inline').value;
+    const ftpPassword = document.getElementById('ftp-password-inline').value;
+    const passiveMode = document.getElementById('ftp-passive-mode').checked;
+    const resultSpan = document.getElementById('ftp-test-result');
+    const testBtn = document.getElementById('test-ftp-btn');
+
+    if (!ftpHost) {
+        resultSpan.innerHTML = '<span style="color: #c62828;">⚠️ Please enter an IP address</span>';
+        return;
+    }
+
+    testBtn.disabled = true;
+    testBtn.textContent = '🔄 Testing...';
+    resultSpan.innerHTML = '<span style="color: #666;">Connecting...</span>';
+
+    try {
+        const response = await fetch('/ftp-test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ftp_host: ftpHost,
+                ftp_port: ftpPort,
+                ftp_username: ftpUsername,
+                ftp_password: ftpPassword,
+                passive_mode: passiveMode
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            resultSpan.innerHTML = `<span style="color: #2e7d32;">✓ ${result.message}</span>`;
+        } else {
+            resultSpan.innerHTML = `<span style="color: #c62828;">✗ ${result.message}</span>`;
+        }
+    } catch (error) {
+        resultSpan.innerHTML = `<span style="color: #c62828;">✗ Error: ${error.message}</span>`;
+    } finally {
+        testBtn.disabled = false;
+        testBtn.textContent = '🔌 Test Connection';
     }
 });
 
