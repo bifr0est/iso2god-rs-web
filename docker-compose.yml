@@ -16,4 +16,7 @@ services:
     environment:
       - ROCKET_ADDRESS=0.0.0.0
       - ROCKET_PORT=8000
+      # Configurable paths (optional - defaults shown)
+      # - ISO2GOD_INPUT_DIR=/data/input
+      # - ISO2GOD_OUTPUT_DIR=/data/output
     restart: unless-stopped

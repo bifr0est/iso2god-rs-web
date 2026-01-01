@@ -33,9 +33,13 @@ RUN mkdir -p /data/input /data/output && \
 # Expose the port the application will run on
 EXPOSE 8000
 
-# Set environment variables
+# Set environment variables for Rocket
 ENV ROCKET_ADDRESS=0.0.0.0
 ENV ROCKET_PORT=8000
+
+# Set configurable paths (can be overridden at runtime)
+ENV ISO2GOD_INPUT_DIR=/data/input
+ENV ISO2GOD_OUTPUT_DIR=/data/output
 
 # Set the entrypoint
 CMD ["./iso2god-web"]

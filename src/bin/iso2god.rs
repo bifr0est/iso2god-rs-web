@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Error};
 
-use clap::{Parser, ValueEnum, arg, command};
+use clap::{Parser, ValueEnum};
 
 use rayon::prelude::*;
 

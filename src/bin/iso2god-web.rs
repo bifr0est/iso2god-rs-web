@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 use std::fs::{self, File};
 use std::io::{Seek, SeekFrom, Write};
 use std::panic;
@@ -27,6 +28,28 @@ use rayon::prelude::*;
 use suppaftp::FtpStream;
 use tempfile::tempdir;
 use walkdir::WalkDir;
+
+/// Application configuration loaded from environment variables
+struct AppConfig {
+    input_dir: PathBuf,
+    output_dir: PathBuf,
+}
+
+impl AppConfig {
+    fn from_env() -> Self {
+        Self {
+            input_dir: PathBuf::from(env::var("ISO2GOD_INPUT_DIR").unwrap_or_else(|_| "/data/input".to_string())),
+            output_dir: PathBuf::from(env::var("ISO2GOD_OUTPUT_DIR").unwrap_or_else(|_| "/data/output".to_string())),
+        }
+    }
+}
+
+/// Global config - initialized once at startup
+static APP_CONFIG: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
+
+fn get_config() -> &'static AppConfig {
+    APP_CONFIG.get_or_init(AppConfig::from_env)
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct FtpProgress {
@@ -95,6 +118,43 @@ struct IsoInfoResponse {
     error: Option<String>,
 }
 
+/// FTP connection configuration - used to reduce function arguments
+#[derive(Clone)]
+struct FtpConfig {
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    target_path: String,
+    passive_mode: bool,
+}
+
+impl FtpConfig {
+    /// Validate FTP configuration
+    fn validate(&self) -> Result<(), String> {
+        if self.host.is_empty() {
+            return Err("FTP host cannot be empty".to_string());
+        }
+        // Basic host validation - no path traversal or special chars
+        if self.host.contains('/') || self.host.contains('\\') || self.host.contains("..") {
+            return Err("Invalid FTP host format".to_string());
+        }
+        if self.port == 0 {
+            return Err("FTP port cannot be 0".to_string());
+        }
+        if self.target_path.contains("..") {
+            return Err("Target path cannot contain '..'".to_string());
+        }
+        Ok(())
+    }
+
+    /// Get sanitized host for logging (mask credentials)
+    fn log_safe_string(&self) -> String {
+        format!("{}:{} (user: {}, passive: {})", 
+            self.host, self.port, self.username, self.passive_mode)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct FtpTransferRequest {
     session_id: String,
@@ -108,6 +168,19 @@ struct FtpTransferRequest {
     passive_mode: bool,
 }
 
+impl FtpTransferRequest {
+    fn to_ftp_config(&self) -> FtpConfig {
+        FtpConfig {
+            host: self.ftp_host.clone(),
+            port: self.ftp_port,
+            username: self.ftp_username.clone(),
+            password: self.ftp_password.clone(),
+            target_path: self.ftp_target_path.clone(),
+            passive_mode: self.passive_mode,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct FtpTestRequest {
     ftp_host: String,
@@ -116,6 +189,19 @@ struct FtpTestRequest {
     ftp_password: String,
     #[serde(default)]
     passive_mode: bool,
+}
+
+impl FtpTestRequest {
+    fn to_ftp_config(&self) -> FtpConfig {
+        FtpConfig {
+            host: self.ftp_host.clone(),
+            port: self.ftp_port,
+            username: self.ftp_username.clone(),
+            password: self.ftp_password.clone(),
+            target_path: String::new(),
+            passive_mode: self.passive_mode,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -175,7 +261,8 @@ struct ConvertedGame {
 
 #[get("/list-converted-games")]
 fn list_converted_games() -> Json<Vec<ConvertedGame>> {
-    let output_dir = Path::new("/data/output");
+    let config = get_config();
+    let output_dir = &config.output_dir;
     let mut games = Vec::new();
 
     if !output_dir.exists() {
@@ -209,7 +296,8 @@ fn list_converted_games() -> Json<Vec<ConvertedGame>> {
 
 #[get("/list-isos")]
 fn list_isos() -> Json<Vec<IsoFile>> {
-    let input_dir = Path::new("/data/input");
+    let config = get_config();
+    let input_dir = &config.input_dir;
     let mut iso_files = Vec::new();
 
     if !input_dir.exists() {
@@ -222,24 +310,22 @@ fn list_isos() -> Json<Vec<IsoFile>> {
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext.eq_ignore_ascii_case("iso") {
-                    if let Ok(metadata) = fs::metadata(path) {
-                        // Use relative path from /data/input for better display
-                        let display_name = path.strip_prefix(input_dir)
-                            .unwrap_or(path)
-                            .to_string_lossy()
-                            .to_string();
+        if path.is_file()
+            && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("iso"))
+            && let Ok(metadata) = fs::metadata(path)
+        {
+            // Use relative path from input_dir for better display
+            let display_name = path
+                .strip_prefix(input_dir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
 
-                        iso_files.push(IsoFile {
-                            path: path.to_string_lossy().to_string(),
-                            name: display_name,
-                            size: metadata.len(),
-                        });
-                    }
-                }
-            }
+            iso_files.push(IsoFile {
+                path: path.to_string_lossy().to_string(),
+                name: display_name,
+                size: metadata.len(),
+            });
         }
     }
 
@@ -564,16 +650,17 @@ fn write_part_mht(
 /// Test FTP connection without transferring any files
 #[post("/ftp-test", format = "json", data = "<request>")]
 async fn ftp_test(request: Json<FtpTestRequest>) -> Json<FtpTestResponse> {
-    let ftp_host = request.ftp_host.clone();
-    let ftp_port = request.ftp_port;
-    let ftp_username = request.ftp_username.clone();
-    let ftp_password = request.ftp_password.clone();
-    let passive_mode = request.passive_mode;
+    let config = request.to_ftp_config();
 
-    let result = tokio::task::spawn_blocking(move || {
-        test_ftp_connection(&ftp_host, ftp_port, &ftp_username, &ftp_password, passive_mode)
-    })
-    .await;
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        return Json(FtpTestResponse {
+            success: false,
+            message: format!("Invalid configuration: {}", e),
+        });
+    }
+
+    let result = tokio::task::spawn_blocking(move || test_ftp_connection(&config)).await;
 
     match result {
         Ok(Ok(msg)) => Json(FtpTestResponse {
@@ -591,16 +678,10 @@ async fn ftp_test(request: Json<FtpTestRequest>) -> Json<FtpTestResponse> {
     }
 }
 
-fn test_ftp_connection(
-    ftp_host: &str,
-    ftp_port: u16,
-    username: &str,
-    password: &str,
-    passive_mode: bool,
-) -> Result<String, Error> {
+fn test_ftp_connection(config: &FtpConfig) -> Result<String, Error> {
     // Connect with timeout
     let mut ftp_stream = FtpStream::connect_timeout(
-        format!("{}:{}", ftp_host, ftp_port)
+        format!("{}:{}", config.host, config.port)
             .parse()
             .map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?,
         Duration::from_secs(10),
@@ -608,13 +689,13 @@ fn test_ftp_connection(
     .context("Failed to connect to FTP server")?;
 
     // Set passive mode if requested
-    if passive_mode {
+    if config.passive_mode {
         ftp_stream.set_passive_nat_workaround(true);
     }
 
     // Login
     ftp_stream
-        .login(username, password)
+        .login(&config.username, &config.password)
         .context("Login failed - check username and password")?;
 
     // Try to get current directory to verify connection works
@@ -635,29 +716,36 @@ async fn ftp_transfer(
     progress_map: &State<FtpProgressMap>,
 ) -> Json<FtpTransferResponse> {
     let god_path = PathBuf::from(&request.god_path);
-    let ftp_host = request.ftp_host.clone();
-    let ftp_port = request.ftp_port;
-    let ftp_username = request.ftp_username.clone();
-    let ftp_password = request.ftp_password.clone();
-    let ftp_target_path = request.ftp_target_path.clone();
+    let config = request.to_ftp_config();
     let session_id = request.session_id.clone();
     let session_id_for_response = session_id.clone();
-    let passive_mode = request.passive_mode;
+
+    // Validate configuration
+    if let Err(e) = config.validate() {
+        return Json(FtpTransferResponse {
+            success: false,
+            message: format!("Invalid configuration: {}", e),
+            files_transferred: 0,
+            session_id: session_id_for_response,
+        });
+    }
+
+    // Validate god_path - prevent path traversal
+    if request.god_path.contains("..") {
+        return Json(FtpTransferResponse {
+            success: false,
+            message: "Invalid GOD path: path traversal not allowed".to_string(),
+            files_transferred: 0,
+            session_id: session_id_for_response,
+        });
+    }
 
     let progress_map_clone = progress_map.inner().clone();
 
+    eprintln!("Starting FTP transfer: {}", config.log_safe_string());
+
     let result = tokio::task::spawn_blocking(move || {
-        transfer_to_ftp(
-            &god_path,
-            &ftp_host,
-            ftp_port,
-            &ftp_username,
-            &ftp_password,
-            &ftp_target_path,
-            passive_mode,
-            session_id,
-            progress_map_clone,
-        )
+        transfer_to_ftp(&god_path, &config, session_id, progress_map_clone)
     })
     .await;
 
@@ -685,12 +773,7 @@ async fn ftp_transfer(
 
 fn transfer_to_ftp(
     god_path: &Path,
-    ftp_host: &str,
-    ftp_port: u16,
-    username: &str,
-    password: &str,
-    target_path: &str,
-    passive_mode: bool,
+    config: &FtpConfig,
     session_id: String,
     progress_map: FtpProgressMap,
 ) -> Result<usize, Error> {
@@ -715,28 +798,28 @@ fn transfer_to_ftp(
         });
     };
 
-    let mode_str = if passive_mode { "passive" } else { "active" };
+    let mode_str = if config.passive_mode { "passive" } else { "active" };
     update_progress(FtpProgress {
-        message: format!("Connecting to FTP server {}:{} ({})", ftp_host, ftp_port, mode_str),
+        message: format!("Connecting to FTP server {}:{} ({})", config.host, config.port, mode_str),
         ..Default::default()
     });
 
-    eprintln!("Connecting to FTP server {}:{} ({})", ftp_host, ftp_port, mode_str);
+    eprintln!("Connecting to FTP server {}:{} ({})", config.host, config.port, mode_str);
 
     // Connect to FTP server with timeout
     let mut ftp_stream = FtpStream::connect_timeout(
-        format!("{}:{}", ftp_host, ftp_port).parse().map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?,
+        format!("{}:{}", config.host, config.port).parse().map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?,
         Duration::from_secs(30)
     ).context("Failed to connect to FTP server (timeout: 30s)")?;
 
     // Set passive mode if requested (better for NAT/firewall)
-    if passive_mode {
+    if config.passive_mode {
         ftp_stream.set_passive_nat_workaround(true);
     }
 
     // Login
     ftp_stream
-        .login(username, password)
+        .login(&config.username, &config.password)
         .context("FTP login failed - check username and password")?;
 
     update_progress(FtpProgress {
@@ -751,9 +834,9 @@ fn transfer_to_ftp(
         .context("Failed to set binary transfer mode")?;
 
     // Create target directory if needed
-    let _ = ftp_stream.mkdir(target_path);
-    ftp_stream.cwd(target_path)
-        .context(format!("Failed to change to target directory: {}", target_path))?;
+    let _ = ftp_stream.mkdir(&config.target_path);
+    ftp_stream.cwd(&config.target_path)
+        .context(format!("Failed to change to target directory: {}", config.target_path))?;
 
     // Count total files first
     let total_files = WalkDir::new(god_path)
@@ -802,7 +885,7 @@ fn transfer_to_ftp(
                 let parent_str = parent.to_string_lossy().replace("\\", "/");
                 if !parent_str.is_empty() && !created_dirs.contains(&parent_str) {
                     // Build path incrementally: /target/dir1/dir2/...
-                    let mut current_path = target_path.to_string();
+                    let mut current_path = config.target_path.clone();
                     for component in parent.components() {
                         let dir_name = component.as_os_str().to_string_lossy();
                         if current_path.ends_with('/') {
@@ -821,10 +904,10 @@ fn transfer_to_ftp(
             }
 
             // Build full remote path
-            let full_remote_path = if target_path.ends_with('/') {
-                format!("{}{}", target_path, remote_path)
+            let full_remote_path = if config.target_path.ends_with('/') {
+                format!("{}{}", config.target_path, remote_path)
             } else {
-                format!("{}/{}", target_path, remote_path)
+                format!("{}/{}", config.target_path, remote_path)
             };
 
             // Upload the file using absolute path
