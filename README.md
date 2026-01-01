@@ -7,11 +7,15 @@ This is a fork of [iliazeus/iso2god-rs](https://github.com/iliazeus/iso2god-rs),
 ## Features
 
 - **Web Interface** - Modern, user-friendly web UI for ISO conversion
+- **Drag & Drop Upload** - Drag ISO files directly into the browser
+- **Batch Conversion** - Convert multiple ISO files at once
 - **Automatic FTP Transfer** - Direct transfer to modded Xbox 360 consoles after conversion
+- **FTP Passive Mode** - Better compatibility with NAT/firewalls
+- **FTP Connection Test** - Verify Xbox connectivity before transfer
 - **Multi-threaded Processing** - Automatic CPU detection for optimal performance
 - **Docker Support** - Easy deployment on NAS systems (Unraid, etc.)
 - **Conversion History** - Track your converted games
-- **Progress Tracking** - Real-time conversion progress with animated status
+- **Progress Tracking** - Real-time conversion and FTP transfer progress
 
 ## Quick Start with Docker
 
@@ -52,17 +56,25 @@ Supported platforms:
    - Open http://localhost:8000 in your browser
 
 2. **Convert an ISO**
-   - Select an ISO file from the dropdown
+   - Select ISO file(s) from the dropdown (hold Ctrl/Cmd for multiple)
+   - Or drag & drop ISO files into the upload area
    - Choose thread count (or use Auto for optimal performance)
    - Optionally enable "Auto-Transfer to Xbox 360"
-   - Click "Convert to GOD" (or "Convert & Transfer")
+   - Click "Convert" (or "Convert & Transfer")
 
-3. **FTP Transfer (Optional)**
+3. **Batch Conversion**
+   - Select multiple files from the server list, or
+   - Drag & drop multiple ISO files at once
+   - All files will be converted sequentially with progress tracking
+
+4. **FTP Transfer (Optional)**
    - Enable "Auto-Transfer to Xbox 360" checkbox
-   - Enter your Xbox 360 FTP credentials
+   - Enter your Xbox 360 IP address and FTP credentials
+   - Use "Test Connection" to verify connectivity
+   - Enable "Passive Mode" if behind NAT/firewall
    - Converted games will automatically transfer after conversion
 
-4. **View Converted Games**
+5. **View Converted Games**
    - Check the "Converted Games" section
    - Transfer any game to your Xbox 360 via FTP
 
@@ -70,8 +82,12 @@ Supported platforms:
 
 ### Environment Variables
 
-- `ROCKET_PORT` - Server port (default: 8000)
-- `ROCKET_ADDRESS` - Server address (default: 0.0.0.0)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROCKET_PORT` | `8000` | Server port |
+| `ROCKET_ADDRESS` | `0.0.0.0` | Server bind address |
+| `ISO2GOD_INPUT_DIR` | `/data/input` | Directory to scan for ISO files |
+| `ISO2GOD_OUTPUT_DIR` | `/data/output` | Directory for converted GOD files |
 
 ### Volume Mounts
 
@@ -102,7 +118,7 @@ Options:
 
 ### Prerequisites
 
-- Rust 1.70 or later
+- Rust 1.85 or later (2024 edition)
 - Docker (for containerized builds)
 
 ### Build Web Interface
