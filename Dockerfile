@@ -1,5 +1,5 @@
 # Stage 1: Build the application
-FROM rust:latest as builder
+FROM rust:latest AS builder
 
 WORKDIR /usr/src/iso2god-rs
 
