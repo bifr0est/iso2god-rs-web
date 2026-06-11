@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Error};
 
-use clap::{Parser, command};
+use clap::Parser;
 
 use iso2god::iso;
 

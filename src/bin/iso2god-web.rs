@@ -14,9 +14,9 @@ use rocket::fs::{FileServer, TempFile};
 use rocket::response::stream::{Event, EventStream};
 use rocket::serde::json::Json;
 use rocket::serde::{Deserialize, Serialize};
-use rocket::tokio::time::{interval, Duration};
-use rocket::{get, launch, post, routes, State};
-use rocket_dyn_templates::{context, Template};
+use rocket::tokio::time::{Duration, interval};
+use rocket::{State, get, launch, post, routes};
+use rocket_dyn_templates::{Template, context};
 
 use iso2god::executable::TitleInfo;
 use iso2god::god::ContentType;
@@ -38,8 +38,12 @@ struct AppConfig {
 impl AppConfig {
     fn from_env() -> Self {
         Self {
-            input_dir: PathBuf::from(env::var("ISO2GOD_INPUT_DIR").unwrap_or_else(|_| "/data/input".to_string())),
-            output_dir: PathBuf::from(env::var("ISO2GOD_OUTPUT_DIR").unwrap_or_else(|_| "/data/output".to_string())),
+            input_dir: PathBuf::from(
+                env::var("ISO2GOD_INPUT_DIR").unwrap_or_else(|_| "/data/input".to_string()),
+            ),
+            output_dir: PathBuf::from(
+                env::var("ISO2GOD_OUTPUT_DIR").unwrap_or_else(|_| "/data/output".to_string()),
+            ),
         }
     }
 }
@@ -150,8 +154,10 @@ impl FtpConfig {
 
     /// Get sanitized host for logging (mask credentials)
     fn log_safe_string(&self) -> String {
-        format!("{}:{} (user: {}, passive: {})", 
-            self.host, self.port, self.username, self.passive_mode)
+        format!(
+            "{}:{} (user: {}, passive: {})",
+            self.host, self.port, self.username, self.passive_mode
+        )
     }
 }
 
@@ -279,7 +285,8 @@ fn list_converted_games() -> Json<Vec<ConvertedGame>> {
         let title_path = entry.path();
         if title_path.is_dir() {
             // This is the title ID directory
-            let title_id = title_path.file_name()
+            let title_id = title_path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("Unknown");
 
@@ -311,7 +318,9 @@ fn list_isos() -> Json<Vec<IsoFile>> {
     {
         let path = entry.path();
         if path.is_file()
-            && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("iso"))
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("iso"))
             && let Ok(metadata) = fs::metadata(path)
         {
             // Use relative path from input_dir for better display
@@ -353,12 +362,15 @@ fn get_iso_info(path: String) -> Json<IsoInfoResponse> {
 
 fn get_iso_title_info(iso_path: &str) -> Result<(String, String), Error> {
     let source_iso_file = File::open(iso_path).context("error opening source ISO file")?;
-    let mut source_iso_reader = iso::IsoReader::read(source_iso_file).context("error reading source ISO")?;
-    let title_info = TitleInfo::from_image(&mut source_iso_reader).context("error reading image executable")?;
+    let mut source_iso_reader =
+        iso::IsoReader::read(source_iso_file).context("error reading source ISO")?;
+    let title_info =
+        TitleInfo::from_image(&mut source_iso_reader).context("error reading image executable")?;
     let exe_info = title_info.execution_info;
 
     let title_id = format!("{:08X}", exe_info.title_id);
-    let game_name = game_list::find_title_by_id(exe_info.title_id).unwrap_or("(unknown)".to_owned());
+    let game_name =
+        game_list::find_title_by_id(exe_info.title_id).unwrap_or("(unknown)".to_owned());
 
     Ok((game_name, title_id))
 }
@@ -382,13 +394,15 @@ async fn convert(mut form: Form<ConversionForm<'_>>) -> Json<ConversionResponse>
         // Handle uploaded ISO
         let temp_dir = match tempdir() {
             Ok(dir) => dir,
-            Err(e) => return Json(ConversionResponse {
-                success: false,
-                message: e.to_string(),
-                god_path: None,
-                game_title: None,
-                title_id: None,
-            })
+            Err(e) => {
+                return Json(ConversionResponse {
+                    success: false,
+                    message: e.to_string(),
+                    god_path: None,
+                    game_title: None,
+                    title_id: None,
+                });
+            }
         };
         let mut temp_path = temp_dir.path().to_path_buf();
         temp_path.push("source.iso");
@@ -449,7 +463,8 @@ async fn convert(mut form: Form<ConversionForm<'_>>) -> Json<ConversionResponse>
         }
 
         result
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(Ok((message, god_path, game_title, title_id)))) => Json(ConversionResponse {
@@ -498,19 +513,26 @@ fn convert_iso(
         .build_global()
     {
         Ok(_) => eprintln!("Thread pool initialized with {} threads", num_threads),
-        Err(_) => eprintln!("Using existing thread pool (requested {} threads)", num_threads),
+        Err(_) => eprintln!(
+            "Using existing thread pool (requested {} threads)",
+            num_threads
+        ),
     }
 
     let source_iso_file = File::open(&source_iso).context("error opening source ISO file")?;
-    let source_iso_file_meta = fs::metadata(&source_iso).context("error reading source ISO file metadata")?;
-    let mut source_iso_reader = iso::IsoReader::read(source_iso_file).context("error reading source ISO")?;
+    let source_iso_file_meta =
+        fs::metadata(&source_iso).context("error reading source ISO file metadata")?;
+    let mut source_iso_reader =
+        iso::IsoReader::read(source_iso_file).context("error reading source ISO")?;
 
-    let title_info = TitleInfo::from_image(&mut source_iso_reader).context("error reading image executable")?;
+    let title_info =
+        TitleInfo::from_image(&mut source_iso_reader).context("error reading image executable")?;
     let exe_info = title_info.execution_info;
     let content_type = title_info.content_type;
 
     let title_id = format!("{:08X}", exe_info.title_id);
-    let game_name = game_list::find_title_by_id(exe_info.title_id).unwrap_or("(unknown)".to_owned());
+    let game_name =
+        game_list::find_title_by_id(exe_info.title_id).unwrap_or("(unknown)".to_owned());
 
     let title_id_str = {
         let mut result = String::new();
@@ -546,7 +568,9 @@ fn convert_iso(
 
     (0..part_count).into_par_iter().try_for_each(|part_index| {
         let mut iso_data_volume = File::open(&source_iso)?;
-        iso_data_volume.seek(SeekFrom::Start(source_iso_reader.volume_descriptor.root_offset))?;
+        iso_data_volume.seek(SeekFrom::Start(
+            source_iso_reader.volume_descriptor.root_offset,
+        ))?;
 
         let part_file = file_layout.part_file_path(part_index);
 
@@ -566,10 +590,12 @@ fn convert_iso(
         Ok::<_, anyhow::Error>(())
     })?;
 
-    let mut mht = read_part_mht(&file_layout, part_count - 1).context("error reading part file MHT")?;
+    let mut mht =
+        read_part_mht(&file_layout, part_count - 1).context("error reading part file MHT")?;
 
     for prev_part_index in (0..part_count - 1).rev() {
-        let mut prev_mht = read_part_mht(&file_layout, prev_part_index).context("error reading part file MHT")?;
+        let mut prev_mht =
+            read_part_mht(&file_layout, prev_part_index).context("error reading part file MHT")?;
 
         prev_mht.add_hash(&mht.digest());
 
@@ -612,14 +638,20 @@ fn convert_iso(
         .context("error writing con header file")?;
 
     // The GOD path is the title directory (base_path/title_id)
-    let god_path = file_layout.con_header_file_path()
+    let god_path = file_layout
+        .con_header_file_path()
         .parent()
         .and_then(|p| p.parent())
         .unwrap()
         .to_string_lossy()
         .to_string();
 
-    Ok((format!("{}Conversion successful!", title_id_str), god_path, game_name, title_id))
+    Ok((
+        format!("{}Conversion successful!", title_id_str),
+        god_path,
+        game_name,
+        title_id,
+    ))
 }
 
 fn ensure_empty_dir(path: &Path) -> Result<(), Error> {
@@ -704,10 +736,7 @@ fn test_ftp_connection(config: &FtpConfig) -> Result<String, Error> {
     // Disconnect
     let _ = ftp_stream.quit();
 
-    Ok(format!(
-        "Connection successful! Current directory: {}",
-        pwd
-    ))
+    Ok(format!("Connection successful! Current directory: {}", pwd))
 }
 
 #[post("/ftp-transfer", format = "json", data = "<request>")]
@@ -798,19 +827,32 @@ fn transfer_to_ftp(
         });
     };
 
-    let mode_str = if config.passive_mode { "passive" } else { "active" };
+    let mode_str = if config.passive_mode {
+        "passive"
+    } else {
+        "active"
+    };
     update_progress(FtpProgress {
-        message: format!("Connecting to FTP server {}:{} ({})", config.host, config.port, mode_str),
+        message: format!(
+            "Connecting to FTP server {}:{} ({})",
+            config.host, config.port, mode_str
+        ),
         ..Default::default()
     });
 
-    eprintln!("Connecting to FTP server {}:{} ({})", config.host, config.port, mode_str);
+    eprintln!(
+        "Connecting to FTP server {}:{} ({})",
+        config.host, config.port, mode_str
+    );
 
     // Connect to FTP server with timeout
     let mut ftp_stream = FtpStream::connect_timeout(
-        format!("{}:{}", config.host, config.port).parse().map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?,
-        Duration::from_secs(30)
-    ).context("Failed to connect to FTP server (timeout: 30s)")?;
+        format!("{}:{}", config.host, config.port)
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?,
+        Duration::from_secs(30),
+    )
+    .context("Failed to connect to FTP server (timeout: 30s)")?;
 
     // Set passive mode if requested (better for NAT/firewall)
     if config.passive_mode {
@@ -830,13 +872,16 @@ fn transfer_to_ftp(
     eprintln!("FTP login successful");
 
     // Set binary mode (important for GOD files!)
-    ftp_stream.transfer_type(suppaftp::types::FileType::Binary)
+    ftp_stream
+        .transfer_type(suppaftp::types::FileType::Binary)
         .context("Failed to set binary transfer mode")?;
 
     // Create target directory if needed
     let _ = ftp_stream.mkdir(&config.target_path);
-    ftp_stream.cwd(&config.target_path)
-        .context(format!("Failed to change to target directory: {}", config.target_path))?;
+    ftp_stream.cwd(&config.target_path).context(format!(
+        "Failed to change to target directory: {}",
+        config.target_path
+    ))?;
 
     // Count total files first
     let total_files = WalkDir::new(god_path)
@@ -852,7 +897,7 @@ fn transfer_to_ftp(
     });
 
     let mut files_transferred = 0;
-    
+
     // Track created directories to avoid redundant mkdir calls
     let mut created_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -911,20 +956,23 @@ fn transfer_to_ftp(
             };
 
             // Upload the file using absolute path
-            let mut file = File::open(path)
-                .context(format!("Failed to open file: {:?}", path))?;
+            let mut file = File::open(path).context(format!("Failed to open file: {:?}", path))?;
 
             ftp_stream
                 .put_file(&full_remote_path, &mut file)
                 .context(format!("Failed to upload file: {}", full_remote_path))?;
 
             files_transferred += 1;
-            eprintln!("Uploaded: {} ({}/{})", full_remote_path, files_transferred, total_files);
+            eprintln!(
+                "Uploaded: {} ({}/{})",
+                full_remote_path, files_transferred, total_files
+            );
         }
     }
 
     // Logout and close connection
-    ftp_stream.quit()
+    ftp_stream
+        .quit()
         .context("Failed to disconnect from FTP server")?;
 
     update_progress(FtpProgress {
@@ -932,14 +980,20 @@ fn transfer_to_ftp(
         files_transferred,
         total_files,
         percentage: 100,
-        message: format!("FTP transfer complete: {} files transferred", files_transferred),
+        message: format!(
+            "FTP transfer complete: {} files transferred",
+            files_transferred
+        ),
         is_complete: true,
     });
 
     // Schedule cleanup of this session from progress map
     cleanup_session();
 
-    eprintln!("FTP transfer complete: {} files transferred", files_transferred);
+    eprintln!(
+        "FTP transfer complete: {} files transferred",
+        files_transferred
+    );
     Ok(files_transferred)
 }
 
@@ -949,7 +1003,19 @@ fn rocket() -> rocket::Rocket<rocket::Build> {
 
     rocket::build()
         .manage(progress_map)
-        .mount("/", routes![index, list_isos, list_converted_games, get_iso_info, convert, ftp_test, ftp_transfer, ftp_progress])
+        .mount(
+            "/",
+            routes![
+                index,
+                list_isos,
+                list_converted_games,
+                get_iso_info,
+                convert,
+                ftp_test,
+                ftp_transfer,
+                ftp_progress
+            ],
+        )
         .mount("/public", FileServer::from("public"))
         .attach(Template::fairing())
 }

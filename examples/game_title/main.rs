@@ -1,5 +1,5 @@
 use anyhow::{Context, Error};
-use clap::{Parser, command};
+use clap::Parser;
 
 use iso2god::game_list;
 
@@ -31,9 +31,9 @@ enum CliTitleType {
     OriginalXbox,
     Homebrew,
 }
-impl Into<unity::TitleType> for CliTitleType {
-    fn into(self) -> unity::TitleType {
-        match self {
+impl From<CliTitleType> for unity::TitleType {
+    fn from(value: CliTitleType) -> Self {
+        match value {
             CliTitleType::Xbox360 => unity::TitleType::Xbox360,
             CliTitleType::Xbla => unity::TitleType::Xbla,
             CliTitleType::OriginalXbox => unity::TitleType::Xbox1,
